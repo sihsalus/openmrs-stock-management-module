@@ -136,7 +136,7 @@ jobs:
           server-username: CENTRAL_USERNAME
           server-password: CENTRAL_PASSWORD
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
-          gpg-passphrase: GPG_PASSPHRASE
+          gpg-passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Check Maven Central version
         id: central-version
