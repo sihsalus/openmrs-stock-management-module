@@ -156,7 +156,7 @@ jobs:
         if: >-
           steps.merged-pr.outputs.exists == 'true' &&
           steps.central-version.outputs.exists == 'false'
-        run: mvn -B -P release deploy -DskipTests
+        run: mvn -B -P release deploy -DskipTests -Dgpg.useAgent=false -Dgpg.passphrase="${GPG_PASSPHRASE}"
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
