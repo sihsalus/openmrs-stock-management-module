@@ -25,7 +25,7 @@ jobs:
           java-version: 8
           cache: maven
 
-      - name: Compile FUA
+      - name: Compile Stock Management
         run: mvn -B clean package -DskipTests
 
       - name: Run unit tests
@@ -46,10 +46,10 @@ jobs:
       contents: read
 
     steps:
-      - name: Check out FUA
+      - name: Check out Stock Management
         uses: actions/checkout@v4
         with:
-          path: fua
+          path: stockmanagement
 
       - name: Set up JDK 8
         uses: actions/setup-java@v4
@@ -58,13 +58,13 @@ jobs:
           java-version: 8
           cache: maven
 
-      - name: Install FUA locally
-        working-directory: fua
+      - name: Install Stock Management locally
+        working-directory: stockmanagement
         run: mvn -B clean install -DskipTests
 
-      - name: Read FUA version
-        id: fua
-        working-directory: fua
+      - name: Read Stock Management version
+        id: stock
+        working-directory: stockmanagement
         run: echo "version=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)" >> "$GITHUB_OUTPUT"
 
       - name: Check out SIHSALUS backend
@@ -76,9 +76,9 @@ jobs:
       - name: Point backend to this stock management build
         working-directory: sihsalus
         run: |
-          sed -i "s/<fua.version>[^<]*<\/fua.version>/<fua.version>${{ steps.fua.outputs.version }}<\/fua.version>/" backend/pom.xml
+          sed -i "s/<stockmanagement.version>[^<]*<\/stockmanagement.version>/<stockmanagement.version>${{ steps.stock.outputs.version }}<\/stockmanagement.version>/" backend/pom.xml
 
-      - name: Build backend with PR FUA
+      - name: Build backend with PR Stock Management
         working-directory: sihsalus
         run: mvn -B -s backend/credentials/settings.xml.template -P backend -pl backend install
 
@@ -137,7 +137,7 @@ jobs:
         if: steps.merged-pr.outputs.exists == 'true'
         run: |
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          URL="https://repo1.maven.org/maven2/io/github/proyecto-santaclotilde/fua-omod/${VERSION}/fua-omod-${VERSION}.pom"
+          URL="https://repo1.maven.org/maven2/io/github/proyecto-santaclotilde/stockmanagement-omod/${VERSION}/stockmanagement-omod-${VERSION}.pom"
           if curl -fsI "$URL" >/dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Version ${VERSION} already exists in Maven Central; skipping publish."
