@@ -140,6 +140,9 @@ jobs:
 
       - name: Validate GPG key import
         if: steps.merged-pr.outputs.exists == 'true'
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
           if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
