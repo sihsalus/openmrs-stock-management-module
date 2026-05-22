@@ -138,6 +138,29 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
+      - name: Validate GPG key import
+        if: steps.merged-pr.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "::error::GPG_PRIVATE_KEY is empty"
+            exit 1
+          fi
+          if [ -z "${GPG_PASSPHRASE:-}" ]; then
+            echo "::error::GPG_PASSPHRASE is empty"
+            exit 1
+          fi
+          printf '%s\n' "$GPG_PRIVATE_KEY" > /tmp/gpg_private_key.asc
+          gpg --batch --import /tmp/gpg_private_key.asc
+          KEY_ID=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
+          if [ -z "$KEY_ID" ]; then
+            echo "::error::No se pudo importar una clave privada desde GPG_PRIVATE_KEY"
+            exit 1
+          fi
+          echo "GPG_KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
+          printf 'test-signature' > /tmp/gpg-signature-test.txt
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --local-user "$KEY_ID" --detach-sign /tmp/gpg-signature-test.txt
+
       - name: Check Maven Central version
         id: central-version
         if: steps.merged-pr.outputs.exists == 'true'
@@ -156,8 +179,9 @@ jobs:
         if: >-
           steps.merged-pr.outputs.exists == 'true' &&
           steps.central-version.outputs.exists == 'false'
-        run: mvn -B -P release deploy -DskipTests -Dgpg.useAgent=false -Dgpg.passphrase="${GPG_PASSPHRASE}"
+        run: mvn -B -P release deploy -DskipTests -Dgpg.useAgent=false -Dgpg.passphrase="${GPG_PASSPHRASE}" -Dgpg.keyname="${GPG_KEY_ID}"
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
