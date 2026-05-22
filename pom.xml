@@ -3,7 +3,7 @@
 
     <groupId>io.github.proyecto-santaclotilde</groupId>
     <artifactId>stockmanagement</artifactId>
-    <version>3.1.0</version>
+    <version>3.1.1-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>Stock Management</name>
     <description>This module supports stock management of medical supplies at health facilities.</description>
