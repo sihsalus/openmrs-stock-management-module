@@ -108,9 +108,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Manual dispatch; proceeding with publish."
+            echo "This run is eligible for publish."
             exit 0
           fi
           PR_COUNT=$(gh api \
