@@ -182,7 +182,7 @@ jobs:
         if: >-
           steps.merged-pr.outputs.exists == 'true' &&
           steps.central-version.outputs.exists == 'false'
-        run: mvn -B -P release deploy -DskipTests -Dgpg.useAgent=false -Dgpg.passphrase="${GPG_PASSPHRASE}" -Dgpg.keyname="${GPG_KEY_ID}"
+        run: mvn -B -P release deploy -DskipTests -Dgpg.useAgent=false -Dgpg.passphrase="${GPG_PASSPHRASE}" -Dgpg.keyname="${GPG_KEY_ID}"  --settings ~/.m2/settings.xml
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
