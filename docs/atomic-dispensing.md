@@ -33,6 +33,19 @@ places or out-of-range values are rejected before recording anything. Substituti
 uses the dispensed drug's inventory and requires the existing substitution privilege,
 type and reason; clinical approval of substitution remains an institutional concern.
 
+Warehouse saves reject changes to the factor, concept or stock item of a packaging
+definition already referenced by ledger entries. They also protect a used stock
+item's drug/concept and a used batch's stock item. Unused definitions remain editable.
+The check reads persisted scalar values without flushing a dirty Hibernate entity;
+it shares the warehouse transaction lock. Correct a used definition by creating a
+new definition and a reviewed stock adjustment, never by rewriting historical units.
+
+An expired batch is unavailable for a new dispense. A correction of an existing
+linked record may keep that same batch only when it does not increase consumption
+in base units and its recorded handover was no later than expiration. This is a
+recording correction, not permission to hand over expired medication or a physical
+return workflow. Pharmacist acceptance of this correction policy is still required.
+
 ## REST contract (version 1)
 
 Paths are relative to `/openmrs/ws/rest/v1/stockmanagement/dispenseoperation`.
@@ -80,8 +93,8 @@ Before considering this issue deployable:
   compile and execute with released FHIR2 4.2.0 and OpenMRS 2.8.9).
 - Add negative tests with operational minimum roles, including substitutions and
   creator-only void, rather than treating the synthetic admin tests as RBAC acceptance.
-- Finish historical-unit/factor mutation protection and expired-batch correction
-  rules, then test those paths without changing historical ledger values.
+- Confirm the expired-batch correction policy with Farmacia and validate the
+  historical-definition protections against deployed data and warehouse workflows.
 - Validate synthetic create/reload/partial dispense/correct/void and connection
   interruption in coordinated QLTY, and record pharmacist acceptance.
 - Reconcile opening stock and unlinked historical records institutionally before
@@ -102,3 +115,13 @@ insufficient stock, rollback after a flushed receipt, correction/void, precision
 Core/FHIR guards, concurrent dispensations and exclusion with warehouse writes.
 HTTP tests use MockMvc to verify binding, recovery, authorization responses and
 safe errors. These are not production or clinical acceptance tests.
+
+The PR's distribution packaging check uses the pinned SIHSALUS revision in
+`.github/workflows/release.yml`. A disposable Dockerfile inserts the PR OMOD's
+Maven installation into the canonical build's existing cache mount, preserving
+its source locks, release checksums and build steps. The image must pass the
+distribution's module checks and contain the exact PR OMOD bytes. This packaging
+check does not start OpenMRS, migrate MariaDB or replace runtime acceptance.
+
+Run `python3 -m unittest discover -s tests/backend -p 'test_*.py'` to check the
+override and rejection of missing, duplicate or substituted artifacts.

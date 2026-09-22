@@ -19,6 +19,8 @@ import org.openmrs.module.stockmanagement.EntityUtil;
 import org.openmrs.module.stockmanagement.api.Privileges;
 import org.openmrs.module.stockmanagement.api.StockManagementService;
 import org.openmrs.module.stockmanagement.api.dao.DispenseOperationDao;
+import org.openmrs.module.stockmanagement.api.dao.StockManagementDao;
+import org.openmrs.module.stockmanagement.api.dto.StockItemPackagingUOMDTO;
 import org.openmrs.module.stockmanagement.api.model.*;
 import org.openmrs.test.BaseModuleContextSensitiveTest;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,6 +40,7 @@ public class AtomicDispensingServiceTest extends BaseModuleContextSensitiveTest 
     @Autowired private DbSessionFactory sessions;
     @Autowired private PlatformTransactionManager transactionManager;
     @Autowired @Qualifier("stockmanagement.dispenseOperationDao") private DispenseOperationDao dao;
+    @Autowired @Qualifier("stockmanagement.atomicStockDao") private StockManagementDao stockDao;
     @Autowired @Qualifier("medicationDispenseTranslatorImpl")
     private MedicationDispenseTranslator<MedicationDispense> translator;
     @Autowired private FhirMedicationDispenseService fhirService;
@@ -289,6 +292,151 @@ public class AtomicDispensingServiceTest extends BaseModuleContextSensitiveTest 
         BigDecimal substitutedBalance = tx(() -> dao.balance(
             (Party) sessions.getCurrentSession().get(Party.class, partyId), result.getStockTransaction().getStockBatch()));
         assertEquals(0, new BigDecimal("16").compareTo(substitutedBalance));
+    }
+
+    @Test public void aUsedPackagingFactorCannotRewriteTheHistoricalBalance() {
+        service.apply(create("4"));
+        StockManagementService warehouse = Context.getService(StockManagementService.class);
+        StockItemPackagingUOM unit = warehouse.getStockItemPackagingUOMByUuid(uomUuid);
+        unit.setFactor(new BigDecimal("10"));
+        expectCode("historicalUnitImmutable", () -> warehouse.saveStockItemPackagingUOM(unit));
+        assertBalance("16");
+        assertEquals(0, BigDecimal.ONE.compareTo(warehouse.getStockItemPackagingUOMByUuid(uomUuid).getFactor()));
+    }
+
+    @Test public void aUsedPackagingConceptCannotChangeTheMeaningOfHistoricalQuantities() {
+        StockManagementService warehouse = Context.getService(StockManagementService.class);
+        StockItemPackagingUOM unit = warehouse.getStockItemPackagingUOMByUuid(uomUuid);
+        unit.setPackagingUom(Context.getConceptService().getConcept(22));
+        expectCode("historicalUnitImmutable", () -> warehouse.saveStockItemPackagingUOM(unit));
+        assertEquals(Integer.valueOf(51), warehouse.getStockItemPackagingUOMByUuid(uomUuid).getPackagingUom().getId());
+        assertBalance("20");
+    }
+
+    @Test public void anUnusedPackagingDefinitionCanStillBeCorrected() {
+        StockManagementService warehouse = Context.getService(StockManagementService.class);
+        StockItemPackagingUOM unused = new StockItemPackagingUOM();
+        unused.setStockItem(warehouse.getStockItemByUuid(itemUuid));
+        unused.setPackagingUom(Context.getConceptService().getConcept(22));
+        unused.setFactor(new BigDecimal("5"));
+        unused = warehouse.saveStockItemPackagingUOM(unused);
+        unused.setFactor(new BigDecimal("6"));
+        warehouse.saveStockItemPackagingUOM(unused);
+        Context.clearSession();
+        assertEquals(0, new BigDecimal("6").compareTo(warehouse.getStockItemPackagingUOMByUuid(unused.getUuid()).getFactor()));
+    }
+
+    @Test public void thePackagingDtoPathAlsoProtectsHistoricalFactors() {
+        StockManagementService warehouse = Context.getService(StockManagementService.class);
+        StockItemPackagingUOMDTO edited = new StockItemPackagingUOMDTO();
+        edited.setUuid(uomUuid);
+        edited.setStockItemUuid(itemUuid);
+        edited.setPackagingUomUuid(Context.getConceptService().getConcept(51).getUuid());
+        edited.setFactor(new BigDecimal("10"));
+        expectCode("historicalUnitImmutable", () -> warehouse.saveStockItemPackagingUOM(edited));
+        assertBalance("20");
+    }
+
+    @Test public void aUsedBatchCannotBeReassignedToAnotherStockItem() {
+        AtomicDispenseCommand substitution = create("4");
+        prepareSubstitution(substitution);
+        expectCode("historicalBatchImmutable", () -> tx(() -> {
+            dao.lockInventory();
+            StockBatch batch = stockDao.getStockBatchByUuid(batchUuid);
+            batch.setStockItem(stockDao.getStockItemByUuid(substitution.getStockItemUuid()));
+            stockDao.saveStockBatch(batch);
+            return null;
+        }));
+        assertEquals(itemUuid, stockDao.getStockBatchByUuid(batchUuid).getStockItem().getUuid());
+        assertBalance("20");
+    }
+
+    @Test public void aUsedStockItemCannotBeReassignedToAnotherDrug() {
+        StockManagementService warehouse = Context.getService(StockManagementService.class);
+        StockItem item = warehouse.getStockItemByUuid(itemUuid);
+        String originalDrug = item.getDrug().getUuid();
+        item.setDrug(Context.getConceptService().getDrug(3));
+        expectCode("historicalItemImmutable", () -> warehouse.saveStockItem(item));
+        assertEquals(originalDrug, warehouse.getStockItemByUuid(itemUuid).getDrug().getUuid());
+        assertBalance("20");
+    }
+
+    @Test public void anExpiredBatchAllowsARecordingCorrectionWithoutAdditionalConsumption() {
+        AtomicDispenseCommand first = create("4");
+        first.getMedicationDispense().setWhenHandedOver(new Date(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(10)));
+        service.apply(first);
+        expireFixtureBatch();
+        AtomicDispenseCommand correction = correctionOf(first, "3");
+        service.apply(correction);
+        assertBalance("17");
+        assertEquals(2, receiptCount());
+        assertEquals(4, movementCount());
+    }
+
+    @Test public void anExpiredBatchCannotBeUsedToIncreaseConsumptionOrRecordDeliveryAfterExpiry() {
+        AtomicDispenseCommand first = create("4");
+        first.getMedicationDispense().setWhenHandedOver(new Date(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(10)));
+        service.apply(first);
+        expireFixtureBatch();
+        expectCode("expiredBatch", () -> service.apply(correctionOf(first, "5")));
+        AtomicDispenseCommand wrongDate = correctionOf(first, "3");
+        wrongDate.getMedicationDispense().setWhenHandedOver(new Date());
+        expectCode("expiredBatch", () -> service.apply(wrongDate));
+        assertBalance("16");
+        assertEquals(1, receiptCount());
+        assertEquals(2, movementCount());
+    }
+
+    @Test public void aNewDispenseCannotSelectAnExpiredBatch() {
+        expireFixtureBatch();
+        AtomicDispenseCommand first = create("4");
+        first.getMedicationDispense().setWhenHandedOver(new Date(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(10)));
+        expectCode("expiredBatch", () -> service.apply(first));
+        assertBalance("20");
+        assertEquals(0, receiptCount());
+    }
+
+    @Test public void anExpiredCorrectionComparesBaseUnitsWhenThePackagingChanges() {
+        AtomicDispenseCommand first = create("4");
+        first.getMedicationDispense().setWhenHandedOver(new Date(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(10)));
+        service.apply(first);
+        expireFixtureBatch();
+        StockManagementService warehouse = Context.getService(StockManagementService.class);
+        StockItemPackagingUOM packaging = audit(new StockItemPackagingUOM());
+        packaging.setStockItem(warehouse.getStockItemByUuid(itemUuid));
+        packaging.setPackagingUom(Context.getConceptService().getConcept(22));
+        packaging.setFactor(new BigDecimal("10"));
+        warehouse.saveStockItemPackagingUOM(packaging);
+        AtomicDispenseCommand correction = correctionOf(first, "1");
+        MedicationDispense changedUnit = translator.toOpenmrsType(correction.getMedicationDispense());
+        changedUnit.setQuantityUnits(packaging.getPackagingUom());
+        correction.setMedicationDispense(translator.toFhirResource(changedUnit));
+        correction.getMedicationDispense().setId((String) null);
+        correction.setPackagingUomUuid(packaging.getUuid());
+        expectCode("expiredBatch", () -> service.apply(correction));
+        assertBalance("16");
+        assertEquals(1, receiptCount());
+    }
+
+    private AtomicDispenseCommand correctionOf(AtomicDispenseCommand first, String quantity) {
+        AtomicDispenseCommand correction = create(quantity);
+        correction.setAction(AtomicDispenseCommand.Action.CORRECT);
+        correction.setMedicationDispenseUuid(first.getMedicationDispenseUuid());
+        correction.setMedicationDispense(first.getMedicationDispense().copy());
+        correction.getMedicationDispense().getQuantity().setValue(new BigDecimal(quantity));
+        correction.setExpectedRevision(1);
+        correction.setExpectedOrderRevision(first.getOperationUuid());
+        correction.setReason("Synthetic correction of a recorded quantity");
+        return correction;
+    }
+
+    private void expireFixtureBatch() {
+        tx(() -> {
+            StockBatch batch = (StockBatch) sessions.getCurrentSession().get(StockBatch.class, batchId);
+            batch.setExpiration(new Date(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(5)));
+            return null;
+        });
+        Context.clearSession();
     }
 
     @Test public void aDrugChangeWithoutDocumentedSubstitutionIsRejected() {

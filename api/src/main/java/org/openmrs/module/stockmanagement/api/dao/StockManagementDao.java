@@ -24,6 +24,7 @@ import org.openmrs.module.stockmanagement.api.dto.*;
 import org.openmrs.module.stockmanagement.api.dto.reporting.*;
 import org.openmrs.module.stockmanagement.api.model.*;
 import org.openmrs.module.stockmanagement.api.utils.DateUtil;
+import org.openmrs.module.stockmanagement.api.dispensing.DispenseOperationException;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -131,6 +132,12 @@ public class StockManagementDao extends DaoBase {
 	}
 	
 	public StockItemPackagingUOM saveStockItemPackagingUOM(StockItemPackagingUOM stockItemPackagingUOM) {
+		assertHistoricalDefinitionUnchanged(stockItemPackagingUOM.getId(),
+            "select u.factor, u.packaging_uom_id, u.stock_item_id from stockmgmt_stock_item_packaging_uom u "
+                + "where u.stock_item_packaging_uom_id = :id and exists (select 1 from stockmgmt_stock_item_transaction t "
+                + "where t.stock_item_packaging_uom_id = u.stock_item_packaging_uom_id)",
+            new Object[] { stockItemPackagingUOM.getFactor(), idOf(stockItemPackagingUOM.getPackagingUom()),
+                idOf(stockItemPackagingUOM.getStockItem()) }, "historicalUnitImmutable");
 		getSession().saveOrUpdate(stockItemPackagingUOM);
 		return stockItemPackagingUOM;
 	}
@@ -185,6 +192,10 @@ public class StockManagementDao extends DaoBase {
 	}
 	
 	public StockBatch saveStockBatch(StockBatch stockBatch) {
+		assertHistoricalDefinitionUnchanged(stockBatch.getId(),
+            "select b.stock_item_id from stockmgmt_stock_batch b where b.stock_batch_id = :id "
+                + "and exists (select 1 from stockmgmt_stock_item_transaction t where t.stock_batch_id = b.stock_batch_id)",
+            new Object[] { idOf(stockBatch.getStockItem()) }, "historicalBatchImmutable");
 		getSession().saveOrUpdate(stockBatch);
 		return stockBatch;
 	}
@@ -199,9 +210,41 @@ public class StockManagementDao extends DaoBase {
     }
 	
 	public StockItem saveStockItem(StockItem stockItem) {
+		assertHistoricalDefinitionUnchanged(stockItem.getId(),
+            "select i.drug_id, i.concept_id from stockmgmt_stock_item i where i.stock_item_id = :id "
+                + "and exists (select 1 from stockmgmt_stock_item_transaction t where t.stock_item_id = i.stock_item_id)",
+            new Object[] { idOf(stockItem.getDrug()), idOf(stockItem.getConcept()) }, "historicalItemImmutable");
 		getSession().saveOrUpdate(stockItem);
 		return stockItem;
 	}
+
+    private static Integer idOf(OpenmrsObject value) {
+        if (value instanceof org.hibernate.proxy.HibernateProxy) {
+            // getId() is not always the mapped identifier getter in OpenMRS.
+            // Reading a foreign key must not initialize a detached lazy reference.
+            return (Integer) ((org.hibernate.proxy.HibernateProxy) value).getHibernateLazyInitializer().getIdentifier();
+        }
+        return value == null ? null : value.getId();
+    }
+
+    private void assertHistoricalDefinitionUnchanged(Integer id, String sql, Object[] proposed, String code) {
+        if (id == null) { return; }
+        // Read committed database scalars, not the possibly dirty entity in the Hibernate session.
+        // The service's inventory mutex prevents a new movement racing this check and update.
+        List<?> rows = getSession().createSQLQuery(sql).setParameter("id", id)
+            .setFlushMode(org.hibernate.FlushMode.MANUAL).list();
+        if (rows.isEmpty()) { return; }
+        Object stored = rows.get(0);
+        Object[] previous = stored instanceof Object[] ? (Object[]) stored : new Object[] { stored };
+        for (int index = 0; index < previous.length; index++) {
+            Object before = previous[index];
+            Object after = proposed[index];
+            boolean equal = before instanceof Number && after instanceof Number
+                ? new BigDecimal(before.toString()).compareTo(new BigDecimal(after.toString())) == 0
+                : Objects.equals(before, after);
+            if (!equal) { throw new DispenseOperationException("stockmanagement.atomic." + code); }
+        }
+    }
 	
 	public StockOperationType getStockOperationTypeByUuid(String uuid) {
 		return (StockOperationType) getSession().createCriteria(StockOperationType.class).add(Restrictions.eq("uuid", uuid))

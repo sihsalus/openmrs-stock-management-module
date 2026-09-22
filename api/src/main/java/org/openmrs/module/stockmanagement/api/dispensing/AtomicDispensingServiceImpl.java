@@ -93,6 +93,7 @@ public class AtomicDispensingServiceImpl extends BaseOpenmrsService implements A
         StockBatch batch = null;
         StockItemPackagingUOM uom = null;
         Party party = null;
+        StockItemTransaction oldMovement = previous == null ? null : previous.getStockTransaction();
         if (command.getAction() != Action.VOID) {
             // Translate into a new object first: invalid requests must not dirty a managed clinical entity.
             target = translator.toOpenmrsType(command.getMedicationDispense());
@@ -103,9 +104,8 @@ public class AtomicDispensingServiceImpl extends BaseOpenmrsService implements A
             batch = stockDao.getStockBatchByUuid(command.getStockBatchUuid());
             uom = stockDao.getStockItemPackagingUOMByUuid(command.getPackagingUomUuid());
             party = stockDao.getPartyByLocation(target.getLocation());
-            validateStock(target, item, batch, uom, party);
+            validateStock(target, item, batch, uom, party, oldMovement);
         }
-        StockItemTransaction oldMovement = previous == null ? null : previous.getStockTransaction();
         List<Integer> batches = new ArrayList<>();
         if (oldMovement != null) { batches.add(oldMovement.getStockBatch().getId()); }
         if (batch != null) { batches.add(batch.getId()); }
@@ -241,7 +241,8 @@ public class AtomicDispensingServiceImpl extends BaseOpenmrsService implements A
         }
     }
 
-    private void validateStock(MedicationDispense target, StockItem item, StockBatch batch, StockItemPackagingUOM uom, Party party) {
+    private void validateStock(MedicationDispense target, StockItem item, StockBatch batch, StockItemPackagingUOM uom,
+        Party party, StockItemTransaction previous) {
         if (item == null || item.getVoided() || batch == null || batch.getVoided() || uom == null || uom.getVoided()
             || party == null || party.getVoided()) { fail("invalidStockSelection"); }
         if (!same(item.getDrug(), target.getDrug()) || !same(batch.getStockItem(), item) || !same(uom.getStockItem(), item)) {
@@ -250,7 +251,19 @@ public class AtomicDispensingServiceImpl extends BaseOpenmrsService implements A
         if (uom.getFactor() == null || uom.getFactor().signum() <= 0 || !same(uom.getPackagingUom(), target.getQuantityUnits())) {
             fail("unitMismatch");
         }
-        if (batch.getExpiration() != null && OpenmrsUtil.firstSecondOfDay(new Date()).after(batch.getExpiration())) { fail("expiredBatch"); }
+        if (batch.getExpiration() != null && OpenmrsUtil.firstSecondOfDay(new Date()).after(batch.getExpiration())) {
+            // A recording correction may reduce the existing consumption of the same expired lot.
+            // It may neither consume more stock nor record a handover after that lot expired.
+            boolean correction = previous != null && same(previous.getStockBatch(), batch)
+                && same(previous.getParty(), party) && same(previous.getStockItem(), item)
+                && previous.getStockItemPackagingUOM() != null && previous.getStockItemPackagingUOM().getFactor() != null
+                && previous.getStockItemPackagingUOM().getFactor().signum() > 0
+                && previous.getQuantity().signum() < 0
+                && BigDecimal.valueOf(target.getQuantity()).multiply(uom.getFactor()).compareTo(
+                    previous.getQuantity().negate().multiply(previous.getStockItemPackagingUOM().getFactor())) <= 0
+                && !OpenmrsUtil.firstSecondOfDay(target.getDateHandedOver()).after(batch.getExpiration());
+            if (!correction) { fail("expiredBatch"); }
+        }
     }
 
     private void requireScope(Location location) {
