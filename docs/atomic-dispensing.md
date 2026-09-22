@@ -46,6 +46,27 @@ in base units and its recorded handover was no later than expiration. This is a
 recording correction, not permission to hand over expired medication or a physical
 return workflow. Pharmacist acceptance of this correction policy is still required.
 
+## Authorization
+
+The coordinator uses OpenMRS's `GET_MEDICATION_DISPENSE` and
+`EDIT_MEDICATION_DISPENSE` constants. Native creation, editing and voiding all use
+the edit privilege; the native delete privilege permits purge and is not needed
+here. The existing pharmacy create/edit/delete-or-creator action privileges,
+pharmacy edit access and scoped inventory-dispense privilege remain required.
+Reads require the native read privilege and an authorized dispensing location.
+
+The existing content separates the `Farmacia` role from `Inventory Dispensing`.
+Validate their assignment and inventory location scopes when activating; do not
+create another role definition in this module. The synthetic tests use a restricted
+fixture role with native clinical read/edit permissions, order/frequency access
+and these action privileges, without superuser or general configuration access.
+
+The fixed activation flag is read with a temporary, narrowly scoped proxy privilege
+when necessary; it is removed in `finally`. The caller never chooses a property
+name or receives general configuration values. Both annotation-based authorization
+and explicit Context privilege failures produce an HTTP 403, not an unknown-write
+outcome.
+
 ## REST contract (version 1)
 
 Paths are relative to `/openmrs/ws/rest/v1/stockmanagement/dispenseoperation`.
@@ -91,8 +112,10 @@ Before considering this issue deployable:
   including upgrade, restart, constraints and two independent sessions.
 - Validate against the distribution's exact FHIR2 build (local tests currently
   compile and execute with released FHIR2 4.2.0 and OpenMRS 2.8.9).
-- Add negative tests with operational minimum roles, including substitutions and
-  creator-only void, rather than treating the synthetic admin tests as RBAC acceptance.
+- Validate the deployed operational roles and inventory scopes. Local restricted-role
+  tests cover the full create/read/correct/creator-void flow and negative cases for
+  missing native/action permissions, substitutions and a different professional;
+  they do not certify the hospital's actual role assignments.
 - Confirm the expired-batch correction policy with Farmacia and validate the
   historical-definition protections against deployed data and warehouse workflows.
 - Validate synthetic create/reload/partial dispense/correct/void and connection
@@ -119,7 +142,8 @@ safe errors. These are not production or clinical acceptance tests.
 The PR's distribution packaging check uses the pinned SIHSALUS revision in
 `.github/workflows/release.yml`. A disposable Dockerfile inserts the PR OMOD's
 Maven installation into the canonical build's existing cache mount, preserving
-its source locks, release checksums and build steps. The image must pass the
+its source locks, release checksums and build steps. It uses the OMOD artifact from
+the verified compile job rather than rebuilding the module. The image must pass the
 distribution's module checks and contain the exact PR OMOD bytes. This packaging
 check does not start OpenMRS, migrate MariaDB or replace runtime acceptance.
 

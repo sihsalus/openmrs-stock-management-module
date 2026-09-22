@@ -83,6 +83,12 @@ public class AtomicDispensingControllerTest {
             .andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("stockmanagement.atomic.forbidden"));
     }
 
+    @Test public void explicitContextPrivilegeChecksAlsoReturnForbidden() throws Exception {
+        when(service.apply(any())).thenThrow(new org.openmrs.api.context.ContextAuthenticationException("synthetic denied privilege"));
+        http.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content(BODY))
+            .andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("stockmanagement.atomic.forbidden"));
+    }
+
     @Test public void conflictsAreExplicitAndNeverRetriedByTheController() throws Exception {
         when(service.apply(any())).thenThrow(new DispenseOperationException("stockmanagement.atomic.operationConflict"));
         http.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content(BODY))

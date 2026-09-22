@@ -17,6 +17,7 @@ import org.openmrs.module.stockmanagement.api.dao.StockManagementDao;
 import org.openmrs.module.stockmanagement.api.model.*;
 import org.openmrs.module.stockmanagement.api.dispensing.AtomicDispenseCommand.Action;
 import org.openmrs.util.OpenmrsUtil;
+import org.openmrs.util.PrivilegeConstants;
 
 public class AtomicDispensingServiceImpl extends BaseOpenmrsService implements AtomicDispensingService {
     public static final String ENABLED_PROPERTY = "stockmanagement.atomicDispensingEnabled";
@@ -36,10 +37,10 @@ public class AtomicDispensingServiceImpl extends BaseOpenmrsService implements A
         validateCommand(command);
         dao.lockInventory();
         requirePrivilege("app:home.farmacia.editar");
-        requirePrivilege("Get Medication Dispenses");
-        String clinicalPrivilege = command.getAction() == Action.CREATE ? "Add Medication Dispenses"
-            : command.getAction() == Action.VOID ? "Delete Medication Dispenses" : "Edit Medication Dispenses";
-        requirePrivilege(clinicalPrivilege);
+        requirePrivilege(PrivilegeConstants.GET_MEDICATION_DISPENSE);
+        // Native save and void both require EDIT; DELETE authorizes purge, which this API never performs.
+        // Keep the existing pharmacy action privileges as the separate create/edit/creator-only policy.
+        requirePrivilege(PrivilegeConstants.EDIT_MEDICATION_DISPENSE);
         if (command.getAction() != Action.VOID) {
             requirePrivilege(command.getAction() == Action.CREATE
                 ? "Task: dispensing.create.dispense" : "Task: dispensing.edit.dispense");
@@ -178,7 +179,14 @@ public class AtomicDispensingServiceImpl extends BaseOpenmrsService implements A
     }
 
     public static boolean enabled() {
-        return "true".equalsIgnoreCase(Context.getAdministrationService().getGlobalProperty(ENABLED_PROPERTY, "false"));
+        // Read only this fixed application setting without granting pharmacy access to all settings.
+        boolean needsProxy = !Context.hasPrivilege(PrivilegeConstants.GET_GLOBAL_PROPERTIES);
+        if (needsProxy) { Context.addProxyPrivilege(PrivilegeConstants.GET_GLOBAL_PROPERTIES); }
+        try {
+            return "true".equalsIgnoreCase(Context.getAdministrationService().getGlobalProperty(ENABLED_PROPERTY, "false"));
+        } finally {
+            if (needsProxy) { Context.removeProxyPrivilege(PrivilegeConstants.GET_GLOBAL_PROPERTIES); }
+        }
     }
 
     private void validateCommand(AtomicDispenseCommand command) {

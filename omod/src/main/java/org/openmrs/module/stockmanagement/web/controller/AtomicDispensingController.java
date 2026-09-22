@@ -72,7 +72,7 @@ public class AtomicDispensingController {
         try {
             Map<String, Object> result = action.get();
             return result == null ? error(404, "operationNotFound") : response(200, result);
-        } catch (APIAuthenticationException denied) {
+        } catch (APIAuthenticationException | org.openmrs.api.context.ContextAuthenticationException denied) {
             return error(403, "forbidden");
         } catch (DispenseOperationException failure) {
             String code = failure.getCode().substring("stockmanagement.atomic.".length());

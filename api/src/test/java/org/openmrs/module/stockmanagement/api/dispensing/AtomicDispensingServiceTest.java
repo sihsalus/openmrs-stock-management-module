@@ -11,10 +11,12 @@ import org.junit.After;
 import org.junit.Test;
 import org.openmrs.*;
 import org.openmrs.api.context.Context;
+import org.openmrs.api.context.ContextAuthenticationException;
 import org.openmrs.api.db.hibernate.DbSessionFactory;
 import org.openmrs.module.fhir2.api.translators.MedicationDispenseTranslator;
 import org.openmrs.module.fhir2.api.FhirMedicationDispenseService;
 import org.openmrs.api.APIException;
+import org.openmrs.api.APIAuthenticationException;
 import org.openmrs.module.stockmanagement.EntityUtil;
 import org.openmrs.module.stockmanagement.api.Privileges;
 import org.openmrs.module.stockmanagement.api.StockManagementService;
@@ -150,6 +152,159 @@ public class AtomicDispensingServiceTest extends BaseModuleContextSensitiveTest 
         assertEquals(Double.valueOf(4), Context.getMedicationDispenseService()
             .getMedicationDispenseByUuid(command.getMedicationDispenseUuid()).getQuantity());
         assertEquals(Order.FulfillerStatus.IN_PROGRESS, Context.getOrderService().getOrderByUuid(orderUuid).getFulfillerStatus());
+    }
+
+    @Test public void aNonAdministratorWithNativePrivilegesCanDispenseReadCorrectAndVoidTheirOwnRecord() {
+        AtomicDispenseCommand first = create("4");
+        asPharmacist(1, java.util.Collections.emptySet(), () -> {
+            assertFalse(Context.getAuthenticatedUser().isSuperUser());
+            assertFalse(Context.hasPrivilege("Get Global Properties"));
+            DispenseOperation created = service.apply(first);
+            assertFalse(Context.hasPrivilege("Get Global Properties"));
+            assertEquals(created.getUuid(), service.getOperation(created.getUuid()).getUuid());
+            assertEquals(1, service.getLatestOperation(first.getMedicationDispenseUuid()).getRevision());
+            assertEquals(created.getUuid(), service.getLatestForOrder(orderUuid,
+                created.getMedicationDispense().getLocation().getUuid()).getUuid());
+            AtomicDispenseCommand correction = correctionOf(first, "3");
+            service.apply(correction);
+            service.apply(voidAfter(correction, 2));
+        });
+        assertBalance("20");
+        assertEquals(3, receiptCount());
+        assertTrue(Context.getMedicationDispenseService().getMedicationDispenseByUuid(first.getMedicationDispenseUuid()).getVoided());
+    }
+
+    @Test public void nativeEditPrivilegeDoesNotReplaceTheDispenseActionPrivilege() {
+        AtomicDispenseCommand command = create("4");
+        asPharmacist(1, java.util.Collections.singleton("Task: dispensing.create.dispense"),
+            () -> expectAuthorizationFailure(ContextAuthenticationException.class, () -> service.apply(command)));
+        assertBalance("20");
+        assertEquals(0, receiptCount());
+        assertNull(Context.getMedicationDispenseService().getMedicationDispenseByUuid(command.getMedicationDispenseUuid()));
+    }
+
+    @Test public void creatorOnlyVoidRejectsAnotherProfessionalsRecord() {
+        AtomicDispenseCommand first = create("4");
+        service.apply(first);
+        asPharmacist(2, java.util.Collections.emptySet(),
+            () -> expectCode("dispenserMismatch", () -> service.apply(voidAfter(first, 1))));
+        assertBalance("16");
+        assertEquals(1, receiptCount());
+        assertFalse(Context.getMedicationDispenseService().getMedicationDispenseByUuid(first.getMedicationDispenseUuid()).getVoided());
+    }
+
+    @Test public void theDispenseActionDoesNotReplaceTheNativeEditPrivilege() {
+        AtomicDispenseCommand command = create("4");
+        asPharmacist(1, java.util.Collections.singleton("Edit Medication Dispense"),
+            () -> expectAuthorizationFailure(ContextAuthenticationException.class, () -> service.apply(command)));
+        assertBalance("20");
+        assertEquals(0, receiptCount());
+    }
+
+    @Test public void receiptRecoveryRequiresTheNativeReadPrivilege() {
+        AtomicDispenseCommand first = create("4");
+        service.apply(first);
+        asPharmacist(1, java.util.Collections.singleton("Get Medication Dispense"),
+            () -> expectAuthorizationFailure(APIAuthenticationException.class, () -> service.getOperation(first.getOperationUuid())));
+        assertBalance("16");
+        assertEquals(1, receiptCount());
+    }
+
+    @Test public void aPharmacistCannotCreateADispenseForAnotherProvider() {
+        AtomicDispenseCommand first = create("4");
+        asPharmacist(2, java.util.Collections.emptySet(),
+            () -> expectCode("dispenserMismatch", () -> service.apply(first)));
+        assertBalance("20");
+        assertEquals(0, receiptCount());
+    }
+
+    @Test public void substitutionRequiresItsOwnActionPrivilege() {
+        AtomicDispenseCommand first = create("4");
+        prepareSubstitution(first);
+        asPharmacist(1, java.util.Collections.emptySet(),
+            () -> expectAuthorizationFailure(ContextAuthenticationException.class, () -> service.apply(first)));
+        assertBalance("20");
+        assertEquals(0, receiptCount());
+    }
+
+    private AtomicDispenseCommand voidAfter(AtomicDispenseCommand previous, int revision) {
+        AtomicDispenseCommand command = new AtomicDispenseCommand();
+        command.setAction(AtomicDispenseCommand.Action.VOID);
+        command.setOperationUuid(UUID.randomUUID().toString());
+        command.setMedicationDispenseUuid(previous.getMedicationDispenseUuid());
+        command.setExpectedRevision(revision);
+        command.setExpectedOrderRevision(previous.getOperationUuid());
+        command.setReason("Synthetic correction of an erroneous dispensing record");
+        return command;
+    }
+
+    private void asPharmacist(int personId, java.util.Set<String> omitted, Runnable action) {
+        // Dataset resets bypass Hibernate's role cache. Never reuse a role's natural key
+        // for different privilege sets in the same application context.
+        String fixtureKey = UUID.randomUUID().toString();
+        String username = "synthetic-pharmacy-" + fixtureKey.substring(0, 8);
+        String password = "Synthetic-Test-Only-" + UUID.randomUUID();
+        tx(() -> {
+            Role role = new Role("Test RX " + fixtureKey);
+            for (String name : java.util.Arrays.asList(
+                Privileges.TASK_STOCKMANAGEMENT_STOCKITEMS_DISPENSE, "app:home.farmacia.editar",
+                "Get Medication Dispense", "Edit Medication Dispense", "Get Orders", "Edit Orders", "Get Order Frequencies",
+                "Get Concepts", "Get Concept Sources", "Get Patients", "Get Encounters", "Get Providers",
+                "Get Locations", "Get Users", "Task: dispensing.create.dispense", "Task: dispensing.edit.dispense",
+                "Task: dispensing.delete.dispense.ifCreator")) {
+                if (omitted.contains(name)) { continue; }
+                Privilege privilege = Context.getUserService().getPrivilege(name);
+                if (privilege == null) { privilege = Context.getUserService().savePrivilege(new Privilege(name)); }
+                role.addPrivilege(privilege);
+            }
+            Context.getUserService().saveRole(role);
+            User user = new User(Context.getPersonService().getPerson(personId));
+            user.setUsername(username);
+            user.addRole(role);
+            Context.getUserService().createUser(user, password);
+            UserRoleScope scope = audit(new UserRoleScope());
+            scope.setRole(role);
+            scope.setUser(user);
+            scope.setPermanent(true);
+            scope.setEnabled(true);
+            sessions.getCurrentSession().save(scope);
+            UserRoleScopeLocation location = audit(new UserRoleScopeLocation());
+            location.setUserRoleScope(scope);
+            location.setLocation(Context.getMedicationDispenseService().getMedicationDispense(1).getLocation());
+            location.setEnableDescendants(false);
+            sessions.getCurrentSession().save(location);
+            UserRoleScopeOperationType operation = audit(new UserRoleScopeOperationType());
+            operation.setUserRoleScope(scope);
+            operation.setStockOperationType((StockOperationType) sessions.getCurrentSession().get(StockOperationType.class, 0));
+            sessions.getCurrentSession().save(operation);
+            return null;
+        });
+        Context.clearSession();
+        Context.logout();
+        try {
+            Context.authenticate(username, password);
+            assertFalse(Context.getAuthenticatedUser().isSuperUser());
+            for (String privilege : java.util.Arrays.asList("Get Medication Dispense", "Edit Medication Dispense",
+                "Task: dispensing.create.dispense")) {
+                assertEquals("Synthetic fixture privilege: " + privilege,
+                    !omitted.contains(privilege), Context.hasPrivilege(privilege));
+            }
+            action.run();
+        } finally {
+            Context.logout();
+            Context.clearSession();
+            Context.authenticate(getCredentials());
+        }
+    }
+
+    private void expectAuthorizationFailure(Class<? extends APIException> type, Runnable action) {
+        try {
+            action.run();
+            fail("Expected a privilege rejection");
+        } catch (APIAuthenticationException | ContextAuthenticationException expected) {
+            // Do not let an unrelated translator/service permission masquerade as an action rejection.
+            assertEquals(type, expected.getClass());
+        } finally { Context.clearSession(); }
     }
 
     @Test public void rejectsReuseOfAnOperationKeyWithDifferentQuantity() {
