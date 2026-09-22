@@ -1847,6 +1847,8 @@ public class StockManagementServiceImpl extends BaseOpenmrsService implements St
         synchronized (STOCK_OPERATION_PROCESSING_LOCK) {
             MessageSourceService messageSourceService = Context.getMessageSourceService();
             StockOperation stockOperation = getStockOperationByUuid(stockOperationDTO.getUuid());
+            // A REST conversion may already have loaded it before this write transaction acquired its lock.
+            if (stockOperation != null) { dao.getSession().refresh(stockOperation); }
             if (action.equals(StockOperationAction.Action.SUBMIT)) {
                 if (!stockOperation.isUpdateable()) {
                     throw new StockManagementException(
@@ -2107,6 +2109,10 @@ public class StockManagementServiceImpl extends BaseOpenmrsService implements St
     }
 
     public void dispenseStockItems(List<DispenseRequest> dispenseRequests) {
+        if (org.openmrs.module.stockmanagement.api.dispensing.AtomicDispensingServiceImpl.enabled()) {
+            throw new org.openmrs.module.stockmanagement.api.dispensing.DispenseOperationException(
+                "stockmanagement.atomic.coordinatedOperationRequired");
+        }
         if (dispenseRequests == null || dispenseRequests.isEmpty())
             return;
         MessageSourceService messageSourceService = Context.getMessageSourceService();

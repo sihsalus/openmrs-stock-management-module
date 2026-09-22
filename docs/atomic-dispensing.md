@@ -1,0 +1,151 @@
+# Coordinated dispensing and inventory
+
+This is the backend portion of [backlog #106](https://github.com/sihsalus/sihsalus-frontend.tasktree/issues/106).
+It is not ready to enable in a hospital. The frontend integration, deployment-database
+validation and operational acceptance listed below remain required.
+
+## Persistence and concurrency
+
+`AtomicDispensingService.apply` writes the native OpenMRS MedicationDispense, the
+existing stock ledger, the caller's explicit order-completion decision and an
+operation receipt in one database transaction. It does not maintain another stock
+balance or a duplicate clinical payload. FHIR2's translator resolves native data.
+
+The operation UUID is the idempotency key. A replay of the same command returns
+the committed receipt; a different command with that UUID conflicts. The caller
+also supplies the last order receipt UUID and the medication dispense revision.
+Concurrent commands based on the same order revision cannot both commit.
+
+A database row lock coordinates the service with warehouse writes through the
+existing StockManagementService transaction proxy. Locks are held to transaction
+completion and work across processes. This initially serializes inventory writes;
+measure contention before rollout. Direct SQL writes outside these services are
+outside the application contract.
+
+Corrections append a compensating stock movement and the replacement deduction.
+Voids compensate the last deduction while retaining the clinical record and all
+receipts. These actions correct recording errors; they do not implement the
+physical return-of-medication workflow. A reason is required. Existing dispensations
+without receipts are never automatically matched to historical ledger entries.
+
+Quantities must fit the existing `DECIMAL(10,2)` ledger exactly. Extra decimal
+places or out-of-range values are rejected before recording anything. Substitution
+uses the dispensed drug's inventory and requires the existing substitution privilege,
+type and reason; clinical approval of substitution remains an institutional concern.
+
+Warehouse saves reject changes to the factor, concept or stock item of a packaging
+definition already referenced by ledger entries. They also protect a used stock
+item's drug/concept and a used batch's stock item. Unused definitions remain editable.
+The check reads persisted scalar values without flushing a dirty Hibernate entity;
+it shares the warehouse transaction lock. Correct a used definition by creating a
+new definition and a reviewed stock adjustment, never by rewriting historical units.
+
+An expired batch is unavailable for a new dispense. A correction of an existing
+linked record may keep that same batch only when it does not increase consumption
+in base units and its recorded handover was no later than expiration. This is a
+recording correction, not permission to hand over expired medication or a physical
+return workflow. Pharmacist acceptance of this correction policy is still required.
+
+## Authorization
+
+The coordinator uses OpenMRS's `GET_MEDICATION_DISPENSE` and
+`EDIT_MEDICATION_DISPENSE` constants. Native creation, editing and voiding all use
+the edit privilege; the native delete privilege permits purge and is not needed
+here. The existing pharmacy create/edit/delete-or-creator action privileges,
+pharmacy edit access and scoped inventory-dispense privilege remain required.
+Reads require the native read privilege and an authorized dispensing location.
+
+The existing content separates the `Farmacia` role from `Inventory Dispensing`.
+Validate their assignment and inventory location scopes when activating; do not
+create another role definition in this module. The synthetic tests use a restricted
+fixture role with native clinical read/edit permissions, order/frequency access
+and these action privileges, without superuser or general configuration access.
+
+The fixed activation flag is read with a temporary, narrowly scoped proxy privilege
+when necessary; it is removed in `finally`. The caller never chooses a property
+name or receives general configuration values. Both annotation-based authorization
+and explicit Context privilege failures produce an HTTP 403, not an unknown-write
+outcome.
+
+## REST contract (version 1)
+
+Paths are relative to `/openmrs/ws/rest/v1/stockmanagement/dispenseoperation`.
+All responses have `Cache-Control: no-store`.
+
+- `GET ?orderUuid=…&locationUuid=…` returns the contract version, whether new
+  coordinated dispensations are enabled and the current order receipt UUID.
+- `POST` accepts `operationUuid`, `action` (`CREATE`, `CORRECT`, `VOID`),
+  `medicationDispenseUuid`, `expectedRevision`, `expectedOrderRevision`,
+  `fulfillerStatus`, `reason` and, except for `VOID`, a FHIR R4
+  `medicationDispense` plus `stockItemUuid`, `stockBatchUuid`, `packagingUomUuid`.
+- `GET /{operationUuid}` recovers a committed receipt. A 404 means no receipt is
+  visible at that moment; it is not evidence that an in-flight POST cannot commit.
+- `GET /latest/{medicationDispenseUuid}` returns that record's latest receipt and
+  revision. A 404 identifies an unlinked historical record.
+
+A receipt contains identifiers, action, revision and `applied: true`. It proves
+that operation committed, not that the medication dispense still has that revision.
+Reload the current clinical record and latest revision before any subsequent edit.
+
+Authentication failures are 401/403, invalid commands are 400, state conflicts are
+409, and unconfirmed mutation failures are 503 with `operationOutcomeUnknown`.
+Errors contain a stable code, never the submitted clinical payload or an exception
+stack. There is no automatic retry in this endpoint.
+
+The frontend must retain the operation/dispense identifiers before sending a POST,
+recover by operation UUID after uncertain responses and reuse the same identifiers
+on an intentional retry. Do not automatically resend after a session change or 401.
+Do not store clinical payloads in browser persistence merely to support retries.
+
+## Activation and outstanding acceptance
+
+`stockmanagement.atomicDispensingEnabled` defaults to `false`. Enabling it requires
+the coordinated frontend in every dispensing entry point, including manual
+prescription completion, corrections and deletion. Once a record has receipts,
+the coordination guard remains in effect even if new creation is disabled.
+
+Before considering this issue deployable:
+
+- Complete the frontend flow and recovery UI, preserving the existing explicit
+  partial/complete order decision and role checks.
+- Test the additive Liquibase changes against the deployed MariaDB version,
+  including upgrade, restart, constraints and two independent sessions.
+- Validate against the distribution's exact FHIR2 build (local tests currently
+  compile and execute with released FHIR2 4.2.0 and OpenMRS 2.8.9).
+- Validate the deployed operational roles and inventory scopes. Local restricted-role
+  tests cover the full create/read/correct/creator-void flow and negative cases for
+  missing native/action permissions, substitutions and a different professional;
+  they do not certify the hospital's actual role assignments.
+- Confirm the expired-batch correction policy with Farmacia and validate the
+  historical-definition protections against deployed data and warehouse workflows.
+- Validate synthetic create/reload/partial dispense/correct/void and connection
+  interruption in coordinated QLTY, and record pharmacist acceptance.
+- Reconcile opening stock and unlinked historical records institutionally before
+  enabling automatic deductions. Do not infer or manufacture inventory balances.
+
+Use a new database backup before a deployment with migration. A frontend rollback
+must not reopen the old independent stock-write path for linked records. Keep the
+guarded backend and receipts, disable new creation if necessary, and use a reviewed
+forward fix or a validated coordinated restore. Do not remove ledger entries or
+receipts to make an older release appear compatible.
+
+## Local verification
+
+Use Java 21 and `mvn test` or `mvn verify`. Integration tests use only H2 and
+synthetic Core fixtures; they create separate real transaction/session boundaries
+and clean their committed fixtures. They cover committed replay, conflicts,
+insufficient stock, rollback after a flushed receipt, correction/void, precision,
+Core/FHIR guards, concurrent dispensations and exclusion with warehouse writes.
+HTTP tests use MockMvc to verify binding, recovery, authorization responses and
+safe errors. These are not production or clinical acceptance tests.
+
+The PR's distribution packaging check uses the pinned SIHSALUS revision in
+`.github/workflows/release.yml`. A disposable Dockerfile inserts the PR OMOD's
+Maven installation into the canonical build's existing cache mount, preserving
+its source locks, release checksums and build steps. It uses the OMOD artifact from
+the verified compile job rather than rebuilding the module. The image must pass the
+distribution's module checks and contain the exact PR OMOD bytes. This packaging
+check does not start OpenMRS, migrate MariaDB or replace runtime acceptance.
+
+Run `python3 -m unittest discover -s tests/backend -p 'test_*.py'` to check the
+override and rejection of missing, duplicate or substituted artifacts.

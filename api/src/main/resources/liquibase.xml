@@ -4717,4 +4717,31 @@ CREATE TRIGGER stockmgmt_location_after_delete
       </column>
     </addColumn>
   </changeSet>
+    <changeSet id="20260921-inventory-transaction-lock" author="sihsalus">
+        <createTable tableName="stockmgmt_inventory_lock">
+            <column name="lock_id" type="int"><constraints nullable="false" primaryKey="true"/></column>
+        </createTable>
+        <insert tableName="stockmgmt_inventory_lock"><column name="lock_id" valueNumeric="1"/></insert>
+    </changeSet>
+    <changeSet id="20260921-atomic-dispense-receipts" author="sihsalus">
+        <comment>Append durable operation receipts; retain the native clinical record and stock ledger.</comment>
+        <createTable tableName="stockmgmt_dispense_operation">
+            <column name="dispense_operation_id" type="int" autoIncrement="true"><constraints primaryKey="true" nullable="false"/></column>
+            <column name="uuid" type="varchar(38)"><constraints nullable="false" unique="true"/></column>
+            <column name="medication_dispense_id" type="int"><constraints nullable="false"/></column>
+            <column name="revision" type="int"><constraints nullable="false"/></column>
+            <column name="request_hash" type="varchar(64)"><constraints nullable="false"/></column>
+            <column name="action" type="varchar(16)"><constraints nullable="false"/></column>
+            <column name="stock_transaction_id" type="int"/>
+            <column name="reversal_transaction_id" type="int"/>
+            <column name="creator" type="int"><constraints nullable="false"/></column>
+            <column name="date_created" type="datetime"><constraints nullable="false"/></column>
+            <column name="reason" type="varchar(255)"/>
+        </createTable>
+        <addUniqueConstraint tableName="stockmgmt_dispense_operation" columnNames="medication_dispense_id,revision" constraintName="stockmgmt_dispense_revision"/>
+        <addForeignKeyConstraint baseTableName="stockmgmt_dispense_operation" baseColumnNames="medication_dispense_id" referencedTableName="medication_dispense" referencedColumnNames="medication_dispense_id" constraintName="stockmgmt_dispense_clinical_fk"/>
+        <addForeignKeyConstraint baseTableName="stockmgmt_dispense_operation" baseColumnNames="stock_transaction_id" referencedTableName="stockmgmt_stock_item_transaction" referencedColumnNames="stock_item_transaction_id" constraintName="stockmgmt_dispense_movement_fk"/>
+        <addForeignKeyConstraint baseTableName="stockmgmt_dispense_operation" baseColumnNames="reversal_transaction_id" referencedTableName="stockmgmt_stock_item_transaction" referencedColumnNames="stock_item_transaction_id" constraintName="stockmgmt_dispense_reversal_fk"/>
+        <addForeignKeyConstraint baseTableName="stockmgmt_dispense_operation" baseColumnNames="creator" referencedTableName="users" referencedColumnNames="user_id" constraintName="stockmgmt_dispense_creator_fk"/>
+    </changeSet>
 </databaseChangeLog>

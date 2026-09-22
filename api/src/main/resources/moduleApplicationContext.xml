@@ -32,6 +32,9 @@
         <property name="preInterceptors">
             <ref bean="serviceInterceptors" />
         </property>
+        <property name="postInterceptors">
+            <list><ref bean="stockmanagement.inventoryWriteLockAdvice" /></list>
+        </property>
         <property name="transactionAttributeSource">
             <ref bean="transactionAttributeSource" />
         </property>
@@ -44,6 +47,36 @@
             <list>
                 <value>org.openmrs.module.stockmanagement.api.StockManagementService</value>
                 <ref bean="stockmanagement.StockManagementService" />
+            </list>
+        </property>
+    </bean>
+    <bean id="stockmanagement.dispenseOperationDao" class="org.openmrs.module.stockmanagement.api.dao.DispenseOperationDao">
+        <property name="sessionFactory" ref="dbSessionFactory" />
+    </bean>
+    <bean id="stockmanagement.inventoryWriteLockAdvice" class="org.openmrs.module.stockmanagement.api.dispensing.InventoryWriteLockAdvice">
+        <property name="dao" ref="stockmanagement.dispenseOperationDao" />
+    </bean>
+    <bean id="stockmanagement.atomicStockDao" class="org.openmrs.module.stockmanagement.api.dao.StockManagementDao">
+        <property name="sessionFactory" ref="dbSessionFactory" />
+    </bean>
+    <bean id="stockmanagement.AtomicDispensingService" class="org.springframework.transaction.interceptor.TransactionProxyFactoryBean">
+        <property name="transactionManager" ref="transactionManager" />
+        <property name="preInterceptors" ref="serviceInterceptors" />
+        <property name="transactionAttributeSource" ref="transactionAttributeSource" />
+        <property name="target">
+            <bean class="org.openmrs.module.stockmanagement.api.dispensing.AtomicDispensingServiceImpl">
+                <property name="dao" ref="stockmanagement.dispenseOperationDao" />
+                <property name="stockDao" ref="stockmanagement.atomicStockDao" />
+                <property name="stockService" ref="stockmanagement.StockManagementService" />
+                <property name="translator" ref="medicationDispenseTranslatorImpl" />
+            </bean>
+        </property>
+    </bean>
+    <bean parent="serviceContext">
+        <property name="moduleService">
+            <list>
+                <value>org.openmrs.module.stockmanagement.api.dispensing.AtomicDispensingService</value>
+                <ref bean="stockmanagement.AtomicDispensingService" />
             </list>
         </property>
     </bean>

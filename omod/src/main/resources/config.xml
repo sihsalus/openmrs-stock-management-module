@@ -19,6 +19,7 @@
         <require_module version="${webservicesRestVersion}">
             org.openmrs.module.webservices.rest
         </require_module>
+        <require_module version="4.2.0">org.openmrs.module.fhir2</require_module>
     </require_modules>
 
     <aware_of_modules>
@@ -346,6 +347,12 @@
         <description>
             Packaging unit priority when default stock operation unit is not set is big to small pack size
         </description>
+    </globalProperty>
+
+    <globalProperty>
+        <property>stockmanagement.atomicDispensingEnabled</property>
+        <defaultValue>false</defaultValue>
+        <description>Enable coordinated clinical dispensing and inventory only after validating the matching frontend, permissions and physical opening balances.</description>
     </globalProperty>
 
     <!-- /Global Properties -->
