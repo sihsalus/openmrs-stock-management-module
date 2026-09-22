@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<dataset>
+    <!-- Extends Core's synthetic MedicationDispenseServiceTest-initialData.xml. -->
+    <fhir_concept_source fhir_concept_source_id="11100" name="HL7 Medication Dispense Status"
+        url="http://terminology.hl7.org/CodeSystem/medicationdispense-status" concept_source_id="11100"
+        creator="1" date_created="2005-01-01 00:00:00.0" retired="0"
+        uuid="eeeea86d-d53b-11ec-8307-0242ac110002" />
+</dataset>

@@ -4,7 +4,7 @@
     <parent>
         <groupId>io.github.proyecto-santaclotilde</groupId>
         <artifactId>stockmanagement</artifactId>
-        <version>3.1.1</version>
+        <version>3.1.2-SNAPSHOT</version>
     </parent>
 
     <artifactId>stockmanagement-api</artifactId>
@@ -13,6 +13,12 @@
     <description>API project for Stock Management</description>
 
     <dependencies>
+        <dependency>
+            <groupId>org.openmrs.module</groupId>
+            <artifactId>fhir2-api</artifactId>
+            <version>4.2.0</version>
+            <scope>provided</scope>
+        </dependency>
         <!-- Begin OpenMRS core -->
 
         <dependency>

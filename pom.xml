@@ -3,7 +3,7 @@
 
     <groupId>io.github.proyecto-santaclotilde</groupId>
     <artifactId>stockmanagement</artifactId>
-    <version>3.1.1</version>
+    <version>3.1.2-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>Stock Management</name>
     <description>This module supports stock management of medical supplies at health facilities.</description>
@@ -40,7 +40,7 @@
     </modules>
 
     <properties>
-        <openmrsPlatformVersion>2.8.0</openmrsPlatformVersion>
+        <openmrsPlatformVersion>2.8.9</openmrsPlatformVersion>
         <javaCompilerVersion>1.8</javaCompilerVersion>
         <webservicesRestVersion>3.0.0</webservicesRestVersion>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
