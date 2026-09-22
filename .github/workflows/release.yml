@@ -29,6 +29,9 @@ jobs:
       - name: Verify Stock Management API and HTTP contract
         run: mvn -B clean verify
 
+      - name: Test distribution build override and artifact verification
+        run: python3 -m unittest discover -s tests/backend -p 'test_*.py'
+
       - name: Upload Jacoco coverage report
         if: success()
         uses: actions/upload-artifact@v4
@@ -60,25 +63,43 @@ jobs:
         working-directory: stockmanagement
         run: mvn -B clean install -DskipTests
 
-      - name: Read Stock Management version
-        id: stock
-        working-directory: stockmanagement
-        run: echo "version=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)" >> "$GITHUB_OUTPUT"
-
       - name: Check out SIHSALUS backend
         uses: actions/checkout@v4
         with:
           repository: sihsalus/sihsalus
+          # Pair this contract check with an immutable distribution revision.
+          ref: 37847d256f48041892f7da09fe60338b15a28061
           path: sihsalus
 
-      - name: Point backend to this stock management build
+      - name: Prepare the canonical distribution build with the PR module
+        run: |
+          set -euo pipefail
+          artifacts=(stockmanagement/omod/target/stockmanagement-*.omod)
+          test "${#artifacts[@]}" -eq 1
+          python3 stockmanagement/tests/backend/stock_distribution.py prepare \
+            --distribution sihsalus --omod "${artifacts[0]}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image with PR Stock Management
         working-directory: sihsalus
         run: |
-          sed -i "s/<stockmanagement.version>[^<]*<\/stockmanagement.version>/<stockmanagement.version>${{ steps.stock.outputs.version }}<\/stockmanagement.version>/" backend/pom.xml
+          docker buildx build --load --progress=plain \
+            --build-arg SECURITY_REFRESH="${GITHUB_SHA}" \
+            -f backend/Dockerfile.stockmanagement-ci -t sihsalus-stockmanagement-pr:ci .
 
-      - name: Build backend with PR Stock Management
-        working-directory: sihsalus
-        run: mvn -B -s backend/credentials/settings.xml.template -P backend -pl backend install
+      - name: Verify distribution modules and exact PR artifact
+        run: |
+          set -euo pipefail
+          bash sihsalus/tests/backend/source-omods-image.sh sihsalus-stockmanagement-pr:ci
+          modules_dir="$(mktemp -d)"
+          container_id="$(docker create sihsalus-stockmanagement-pr:ci)"
+          trap 'docker rm "$container_id" >/dev/null; rm -rf "$modules_dir"' EXIT
+          docker cp "$container_id:/openmrs/distribution/openmrs_modules/." "$modules_dir/"
+          artifacts=(stockmanagement/omod/target/stockmanagement-*.omod)
+          test "${#artifacts[@]}" -eq 1
+          python3 stockmanagement/tests/backend/stock_distribution.py verify \
+            --modules "$modules_dir" --omod "${artifacts[0]}"
 
   publish:
     runs-on: ubuntu-latest
